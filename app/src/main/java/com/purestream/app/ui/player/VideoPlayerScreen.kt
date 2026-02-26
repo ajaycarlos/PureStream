@@ -36,11 +36,20 @@ fun VideoPlayerScreen(
             val mediaItem = MediaItem.fromUri(videoUri)
             setMediaItem(mediaItem)
             prepare()
-            playWhenReady = true
+            playWhenReady = false // DO NOT PLAY YET! We need to seek first.
         }
     }
 
-    // 2. Setup the Subtitle File Picker
+    // 2. Fetch Progress and Seek
+    LaunchedEffect(videoUri) {
+        val savedProgress = playerViewModel.getVideoProgress(videoUri.toString())
+        if (savedProgress > 0L) {
+            exoPlayer.seekTo(savedProgress)
+        }
+        exoPlayer.playWhenReady = true // Start playing from the saved timestamp
+    }
+
+    // 3. Setup the Subtitle File Picker
     val srtPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri ->
@@ -48,19 +57,13 @@ fun VideoPlayerScreen(
         }
     )
 
-    // 3. The Cleanup (Important for battery life)
-    DisposableEffect(Unit) {
-        onDispose {
-            exoPlayer.release()
-        }
-    }
-
-    // 4. THE PROFANITY FILTER LOOP
-    // This runs 10 times every second to check if the audio should be muted
+    // 4. THE PROFANITY FILTER & PROGRESS SAVER LOOP
     LaunchedEffect(muteSegments) {
+        var loopCount = 0
         while (isActive) {
             val currentPos = exoPlayer.currentPosition
 
+            // --- Profanity Mute Logic ---
             val shouldMute = muteSegments.any { segment ->
                 currentPos in segment.startTimeMs..segment.endTimeMs
             }
@@ -70,13 +73,30 @@ fun VideoPlayerScreen(
             } else if (!shouldMute && exoPlayer.volume == 0f) {
                 exoPlayer.volume = 1f
             }
-            delay(100) // 100ms delay to keep the CPU cool
+
+            // --- Progress Save Logic ---
+            // Save Progress every 5 seconds (50 loops of 100ms) to reduce DB writes
+            loopCount++
+            if (loopCount >= 50 && exoPlayer.isPlaying) {
+                playerViewModel.updateVideoProgress(context, videoUri.toString(), currentPos)
+                loopCount = 0
+            }
+
+            delay(100)
         }
     }
 
-    // 5. The Final UI (VLC Style Layout)
+    // 5. The Cleanup
+    DisposableEffect(Unit) {
+        onDispose {
+            // Save one absolute last time before the screen is destroyed
+            playerViewModel.updateVideoProgress(context, videoUri.toString(), exoPlayer.currentPosition)
+            exoPlayer.release()
+        }
+    }
+
+    // 6. The Final UI
     Box(modifier = Modifier.fillMaxSize()) {
-        // The Video Content
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
@@ -90,7 +110,6 @@ fun VideoPlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        // The "Load Subtitles" Button Overlay
         Button(
             onClick = {
                 srtPickerLauncher.launch(arrayOf("application/x-subrip", "text/plain"))

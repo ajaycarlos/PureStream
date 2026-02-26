@@ -1,5 +1,6 @@
 package com.purestream.app.ui.video
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -9,11 +10,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,9 +37,18 @@ fun VideoScreen(
     onVideoClick: (String) -> Unit,
     viewModel: LibraryViewModel = hiltViewModel()
 ) {
-    val videos by viewModel.savedVideos.collectAsState(initial = emptyList())
+    // 1. Observe the grouped data from the ViewModel instead of the flat list
+    val groupedVideos by viewModel.groupedVideos.collectAsState(initial = emptyMap())
 
-    if (videos.isEmpty()) {
+    // 2. State to track if we are inside a folder. Null means we are at the Root Hybrid Grid.
+    var currentFolder by remember { mutableStateOf<String?>(null) }
+
+    // 3. Intercept the hardware back button to pop out of a folder instead of exiting the app
+    BackHandler(enabled = currentFolder != null) {
+        currentFolder = null
+    }
+
+    if (groupedVideos.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("No videos found. Tap the refresh icon.")
         }
@@ -51,10 +60,78 @@ fun VideoScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            items(videos) { video ->
-                PureStreamVideoCard(video = video, onClick = onVideoClick)
+            if (currentFolder == null) {
+                // --- ROOT VIEW: THE HYBRID GRID ---
+                groupedVideos.forEach { (folderName, videoList) ->
+                    if (videoList.size == 1) {
+                        // Exactly 1 video: Render as a standard video card
+                        item {
+                            PureStreamVideoCard(video = videoList.first(), onClick = onVideoClick)
+                        }
+                    } else {
+                        // Multiple videos: Render as a Folder card
+                        item {
+                            FolderGridCard(
+                                folderName = folderName,
+                                videoCount = videoList.size,
+                                onClick = { currentFolder = folderName }
+                            )
+                        }
+                    }
+                }
+            } else {
+                // --- FOLDER VIEW: SHOW VIDEOS INSIDE SELECTED FOLDER ---
+                val videosInFolder = groupedVideos[currentFolder] ?: emptyList()
+                items(videosInFolder) { video ->
+                    PureStreamVideoCard(video = video, onClick = onVideoClick)
+                }
             }
         }
+    }
+}
+
+@Composable
+fun FolderGridCard(folderName: String, videoCount: Int, onClick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = "Folder",
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            // Folder Item Count Badge
+            Box(
+                modifier = Modifier
+                    .padding(8.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                    .align(Alignment.BottomEnd)
+            ) {
+                Text(
+                    text = "$videoCount videos",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = folderName,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
     }
 }
 
